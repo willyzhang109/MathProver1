@@ -1,0 +1,13 @@
+{$DOMAIN} {
+	request_body {
+		max_size 256KB
+	}
+
+	# Caddy appends the peer it actually sees to X-Forwarded-For, so the
+	# rightmost entry is the true client. server/clientip.py walks the chain
+	# right-to-left and takes the first address outside TRUSTED_PROXIES, which
+	# is what makes a client-supplied prefix unspoofable.
+	reverse_proxy api:8080
+
+	# CORS is emitted by FastAPI. Do not add it here or headers get duplicated.
+}

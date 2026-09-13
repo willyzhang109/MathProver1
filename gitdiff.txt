@@ -1,0 +1,503 @@
+diff --git a/.dockerignore b/.dockerignore
+deleted file mode 100644
+index 1a4e981..0000000
+--- a/.dockerignore
++++ /dev/null
+@@ -1,17 +0,0 @@
+-# Build context hygiene. Without this, `gcloud builds submit` uploads .lake
+-# (~10 GB of Mathlib oleans), the local venv, and hundreds of scratch files.
+-.git
+-.lake
+-.venv
+-runs
+-dist
+-web
+-**/.lake
+-**/__pycache__
+-**/*.olean
+-*-Submission-*
+-*_[0-9]*.lean
+-*_[0-9]*.txt
+-.DS_Store
+-**/.DS_Store
+-.devcontainer
+diff --git a/deploy/docker/Caddyfile b/deploy/docker/Caddyfile
+deleted file mode 100644
+index 9d7cf94..0000000
+--- a/deploy/docker/Caddyfile
++++ /dev/null
+@@ -1,13 +0,0 @@
+-{$DOMAIN} {
+-	request_body {
+-		max_size 256KB
+-	}
+-
+-	# Caddy appends the peer it actually sees to X-Forwarded-For, so the
+-	# rightmost entry is the true client. server/clientip.py walks the chain
+-	# right-to-left and takes the first address outside TRUSTED_PROXIES, which
+-	# is what makes a client-supplied prefix unspoofable.
+-	reverse_proxy api:8080
+-
+-	# CORS is emitted by FastAPI. Do not add it here or headers get duplicated.
+-}
+diff --git a/deploy/docker/Dockerfile b/deploy/docker/Dockerfile
+deleted file mode 100644
+index f15907c..0000000
+--- a/deploy/docker/Dockerfile
++++ /dev/null
+@@ -1,76 +0,0 @@
+-# MathProver API image.
+-#
+-# Large by nature: Mathlib's oleans are ~5-10 GB and are baked in so the
+-# container boots without network fetches. Expect a 12-18 GB image.
+-#
+-# Layer order is deliberate: the Lean toolchain and Mathlib are built before any
+-# application code is copied, so editing server/ or web/ does not rebuild
+-# Mathlib.
+-
+-FROM python:3.13-slim-bookworm
+-
+-ARG DEBIAN_FRONTEND=noninteractive
+-RUN apt-get update && apt-get install -y --no-install-recommends \
+-        curl ca-certificates git build-essential procps \
+-    && rm -rf /var/lib/apt/lists/*
+-
+-# Unprivileged runtime account. Untrusted Lean executes at elaboration time, so
+-# nothing here should ever run as root.
+-RUN useradd --create-home --home-dir /srv/mathprover --shell /bin/bash --uid 1000 prover
+-
+-USER prover
+-ENV HOME=/srv/mathprover \
+-    PATH=/srv/mathprover/.elan/bin:/srv/mathprover/app/.venv/bin:/usr/local/bin:/usr/bin:/bin \
+-    PYTHONUNBUFFERED=1 \
+-    LEAN_CC="clang -O1"
+-
+-WORKDIR /srv/mathprover/app
+-
+-# --- Lean toolchain ---------------------------------------------------------
+-COPY --chown=prover:prover lean-toolchain ./
+-RUN curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+-      | sh -s -- -y --default-toolchain none \
+- && lake --version
+-
+-# --- Mathlib + safe_verify (the expensive layer) ----------------------------
+-COPY --chown=prover:prover lakefile.toml lake-manifest.json ./
+-COPY --chown=prover:prover SafeVerify ./SafeVerify
+-COPY --chown=prover:prover PyPantograph ./PyPantograph
+-RUN lake exe cache get && lake build safe_verify \
+- && test -x SafeVerify/.lake/build/bin/safe_verify
+-
+-# --- Python environment -----------------------------------------------------
+-# The venv must live at $REPO_ROOT/.venv: server/config.py derives python_bin
+-# from it, and that is the interpreter used to spawn prover subprocesses.
+-COPY --chown=prover:prover requirements.txt requirements-server.txt ./
+-RUN python3 -m venv .venv \
+- && .venv/bin/pip install --no-cache-dir --upgrade pip uv \
+- && mkdir -p dist \
+- && (cd PyPantograph && ../.venv/bin/uv build --wheel --out-dir ../dist) \
+- && .venv/bin/pip install --no-cache-dir "$(find ./dist -name '*.whl' | head -1)" \
+- && .venv/bin/pip install --no-cache-dir -r requirements.txt -r requirements-server.txt \
+- && rm -rf dist
+-
+-# --- Application ------------------------------------------------------------
+-COPY --chown=prover:prover *.py ./
+-COPY --chown=prover:prover server ./server
+-COPY --chown=prover:prover tests ./tests
+-# compose.yaml / Caddyfile ship in the image so the VM startup script can
+-# extract them instead of needing a repo checkout on the host.
+-COPY --chown=prover:prover deploy ./deploy
+-RUN mkdir -p runs
+-
+-ENV SAFEVERIFY_BIN=/srv/mathprover/app/SafeVerify/.lake/build/bin/safe_verify \
+-    SAFEVERIFY_LEAN_CMD=lean
+-
+-EXPOSE 8080
+-
+-HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
+-  CMD python3 -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/health',timeout=4)"
+-
+-# One worker only: jobs, rate-limit counters and the checker pool are all
+-# in-process state. --forwarded-allow-ips="" keeps uvicorn from rewriting
+-# request.client before server/clientip.py can vet X-Forwarded-For.
+-CMD [".venv/bin/uvicorn", "server.app:app", \
+-     "--host", "0.0.0.0", "--port", "8080", "--workers", "1", \
+-     "--forwarded-allow-ips=", "--no-access-log"]
+diff --git a/deploy/docker/README.md b/deploy/docker/README.md
+deleted file mode 100644
+index 837dc82..0000000
+--- a/deploy/docker/README.md
++++ /dev/null
+@@ -1,157 +0,0 @@
+-# Running the API in a container on GCP
+-
+-## Use Compute Engine, not Cloud Run
+-
+-Cloud Run is the obvious choice for "a container on GCP" and it is the wrong one
+-here. Four independent reasons, any one of which is fatal:
+-
+-- **State is in memory.** Jobs, rate-limit counters and the checker pool live in
+-  the process. Cloud Run scales horizontally and recycles instances freely, so
+-  users would lose jobs mid-run and each replica would enforce its own separate
+-  3-per-hour limit.
+-- **Work continues between requests.** A job runs for up to 20 minutes after the
+-  POST that created it has returned. Cloud Run throttles CPU to near zero
+-  outside a request unless CPU is always allocated, which stalls the asyncio job
+-  workers and the tailer.
+-- **Memory ceiling.** Cloud Run tops out at 32 GiB per instance. Even a modest
+-  configuration wants more than that once several Mathlib-resident processes are
+-  live.
+-- **Cold start.** Each checker takes ~100 s to import Mathlib. Scale-to-zero
+-  means the first visitor after an idle period waits minutes.
+-
+-GKE has the same in-memory-state problem plus more machinery. A single Compute
+-Engine VM running the container is the right shape: one long-lived instance,
+-large memory, no autoscaling.
+-
+-## Prerequisites
+-
+-- A domain name (the Pages site is HTTPS, so the API must be too).
+-- A GCP project with billing, and `gcloud` authenticated locally.
+-- A **fresh** Gemini key — the old one is in this repo's git history.
+-
+-## 1. Artifact Registry
+-
+-```bash
+-gcloud config set project YOUR_PROJECT
+-gcloud services enable artifactregistry.googleapis.com cloudbuild.googleapis.com \
+-                        secretmanager.googleapis.com compute.googleapis.com
+-
+-gcloud artifacts repositories create mathprover \
+-  --repository-format=docker --location=us-central1
+-```
+-
+-## 2. Build the image
+-
+-Build in Cloud Build, not locally: the image is 12-18 GB (Mathlib's oleans are
+-baked in so the container boots without network fetches), and pushing that from
+-a laptop is painful.
+-
+-```bash
+-gcloud builds submit --config deploy/docker/cloudbuild.yaml .
+-```
+-
+-`.dockerignore` keeps the upload at ~164 MB instead of 15 GB by excluding
+-`.lake`, `.venv` and the scratch files. The build itself takes 30-60 minutes,
+-almost all of it `lake exe cache get` and `lake build safe_verify`; the config
+-requests a 250 GB build disk and a 90-minute timeout because the defaults are
+-far too small.
+-
+-Layer order means later code-only changes rebuild in a minute or two — Mathlib
+-is built before any application code is copied.
+-
+-## 3. Store the API key
+-
+-```bash
+-printf '%s' 'YOUR_FRESH_GEMINI_KEY' | \
+-  gcloud secrets create gemini-api-key --data-file=-
+-```
+-
+-## 4. Create the VM
+-
+-Give it a service account with **no roles** beyond reading that secret and
+-pulling images. Untrusted Lean executes at elaboration time, so assume the
+-container is reachable by an attacker.
+-
+-```bash
+-gcloud iam service-accounts create mathprover-vm
+-SA="mathprover-vm@$(gcloud config get-value project).iam.gserviceaccount.com"
+-
+-gcloud secrets add-iam-policy-binding gemini-api-key \
+-  --member="serviceAccount:$SA" --role=roles/secretmanager.secretAccessor
+-gcloud projects add-iam-policy-binding "$(gcloud config get-value project)" \
+-  --member="serviceAccount:$SA" --role=roles/artifactregistry.reader
+-
+-gcloud compute addresses create mathprover-ip --region=us-central1
+-
+-IMAGE="us-central1-docker.pkg.dev/$(gcloud config get-value project)/mathprover/api:latest"
+-
+-gcloud compute instances create mathprover \
+-  --zone=us-central1-a \
+-  --machine-type=n2-highmem-8 \
+-  --boot-disk-size=200GB --boot-disk-type=pd-balanced \
+-  --image-family=ubuntu-2204-lts --image-project=ubuntu-os-cloud \
+-  --address=mathprover-ip \
+-  --service-account="$SA" \
+-  --scopes=https://www.googleapis.com/auth/cloud-platform \
+-  --tags=https-server,http-server \
+-  --metadata=image="$IMAGE",domain=api.yourdomain.com,\
+-cors-origins=https://willyzhang109.github.io,gemini-secret=gemini-api-key \
+-  --metadata-from-file=startup-script=deploy/docker/vm-startup.sh
+-
+-gcloud compute firewall-rules create allow-web \
+-  --allow=tcp:80,tcp:443 --target-tags=https-server,http-server
+-```
+-
+-**Sizing.** `n2-highmem-8` is 64 GB, which comfortably fits the defaults in
+-`compose.yaml` (`MAX_CONCURRENT_JOBS=2 × PROVER_NUM_PROCS=2` plus
+-`CHECKER_POOL_SIZE=2`, so six Mathlib-resident processes). Watch real usage
+-before raising those — `docker stats` and `ps -o rss` on the VM.
+-
+-## 5. DNS, then wait for warm-up
+-
+-Point an `A` record for `api.yourdomain.com` at the reserved IP. Caddy gets a
+-certificate automatically on first request.
+-
+-```bash
+-curl https://api.yourdomain.com/api/health
+-```
+-
+-Wait for `checkers_ready` to be non-zero — roughly two minutes after boot.
+-Until then `/api/lean/check` returns 503 `checker_warming`.
+-
+-## 6. Deploy the site
+-
+-Unchanged from the VM path: set the repository variable `API_BASE_URL` to
+-`https://api.yourdomain.com`, set Pages source to GitHub Actions, and run the
+-**Deploy site to Pages** workflow.
+-
+-## Updating
+-
+-```bash
+-gcloud builds submit --config deploy/docker/cloudbuild.yaml .
+-gcloud compute ssh mathprover --zone=us-central1-a --command \
+-  'cd /opt/mathprover && sudo docker compose pull && sudo docker compose up -d'
+-```
+-
+-A redeploy drops running jobs — state is in memory by design. The container's
+-90-second stop grace period lets the shutdown hook kill child process groups
+-first, so no orphaned `pantograph-repl` survives.
+-
+-## Container-specific details worth knowing
+-
+-- **`TRUSTED_PROXIES` is `172.28.0.0/16`, not `127.0.0.1/32`.** Inside Docker the
+-  reverse proxy is another container on the bridge network. Leaving the default
+-  would make every request appear to come from Caddy, collapsing all users into
+-  a single rate-limit bucket. The subnet is pinned in `compose.yaml` so this
+-  stays deterministic.
+-- **`init: true` is required.** The prover forks `multiprocessing` children; with
+-  uvicorn as PID 1 nothing reaps them and defunct entries accumulate.
+-- **The metadata server is blocked** by an iptables rule in the startup script.
+-  `169.254.169.254` hands out this VM's service-account tokens to anything that
+-  can make an HTTP request, and the container runs untrusted Lean. The
+-  no-roles service account is the second layer.
+-- **Never scale to more than one `api` replica**, for the same in-memory-state
+-  reason Cloud Run is unsuitable.
+-- The container runs as uid 1000 (`prover`), with `cap_drop: ALL` and
+-  `no-new-privileges`. The root filesystem is left writable because Lean writes
+-  trace files into `.lake`.
+diff --git a/deploy/docker/cloudbuild.yaml b/deploy/docker/cloudbuild.yaml
+deleted file mode 100644
+index b84c1df..0000000
+--- a/deploy/docker/cloudbuild.yaml
++++ /dev/null
+@@ -1,31 +0,0 @@
+-# gcloud builds submit --config deploy/docker/cloudbuild.yaml .
+-#
+-# Building locally and pushing a 12-18 GB image over a home connection is
+-# painful; Cloud Build keeps the bytes inside Google's network.
+-
+-steps:
+-  - name: gcr.io/cloud-builders/docker
+-    args:
+-      - build
+-      - -f
+-      - deploy/docker/Dockerfile
+-      - -t
+-      - ${_IMAGE}:${SHORT_SHA}
+-      - -t
+-      - ${_IMAGE}:latest
+-      - .
+-
+-images:
+-  - ${_IMAGE}:${SHORT_SHA}
+-  - ${_IMAGE}:latest
+-
+-substitutions:
+-  _IMAGE: us-central1-docker.pkg.dev/${PROJECT_ID}/mathprover/api
+-
+-options:
+-  # Mathlib needs both the disk and the CPU; the defaults are far too small.
+-  machineType: E2_HIGHCPU_8
+-  diskSizeGb: 250
+-  logging: CLOUD_LOGGING_ONLY
+-
+-timeout: 5400s
+diff --git a/deploy/docker/compose.yaml b/deploy/docker/compose.yaml
+deleted file mode 100644
+index 4f56ab0..0000000
+--- a/deploy/docker/compose.yaml
++++ /dev/null
+@@ -1,65 +0,0 @@
+-# docker compose -f deploy/docker/compose.yaml up -d
+-#
+-# Exactly one api replica. Never scale this: jobs, rate-limit counters and the
+-# checker pool are in-process state, so a second replica halves the effective
+-# rate limit and hides half of each user's job list.
+-
+-name: mathprover
+-
+-networks:
+-  edge:
+-    driver: bridge
+-    ipam:
+-      config:
+-        # Pinned so TRUSTED_PROXIES below can name it exactly. Inside Docker the
+-        # reverse proxy is NOT 127.0.0.1 -- it is another container on this
+-        # subnet. Leaving the default 127.0.0.1/32 would make every request look
+-        # like it came from Caddy, collapsing all users into one rate-limit
+-        # bucket.
+-        - subnet: 172.28.0.0/16
+-
+-services:
+-  api:
+-    image: ${IMAGE:-mathprover-api:latest}
+-    restart: always
+-    networks: [edge]
+-    expose: ["8080"]
+-    # Reap zombies: the prover forks multiprocessing children, and without an
+-    # init as PID 1 they accumulate as defunct entries until TasksMax is hit.
+-    init: true
+-    stop_grace_period: 90s
+-    mem_limit: ${MEM_LIMIT:-48g}
+-    cpus: ${CPUS:-8}
+-    pids_limit: 2048
+-    security_opt:
+-      - no-new-privileges:true
+-    cap_drop: [ALL]
+-    volumes:
+-      - runs:/srv/mathprover/app/runs
+-    environment:
+-      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY}
+-      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
+-      TRUSTED_PROXIES: 172.28.0.0/16
+-      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
+-      PROVER_NUM_PROCS: ${PROVER_NUM_PROCS:-2}
+-      CHECKER_POOL_SIZE: ${CHECKER_POOL_SIZE:-2}
+-      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-1200}
+-      MAX_JOBS_PER_DAY: ${MAX_JOBS_PER_DAY:-60}
+-
+-  caddy:
+-    image: caddy:2-alpine
+-    restart: always
+-    networks: [edge]
+-    ports: ["80:80", "443:443"]
+-    volumes:
+-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+-      - caddy_data:/data
+-      - caddy_config:/config
+-    environment:
+-      DOMAIN: ${DOMAIN:?set DOMAIN}
+-    depends_on: [api]
+-
+-volumes:
+-  runs:
+-  caddy_data:
+-  caddy_config:
+diff --git a/deploy/docker/vm-startup.sh b/deploy/docker/vm-startup.sh
+deleted file mode 100755
+index d049f0a..0000000
+--- a/deploy/docker/vm-startup.sh
++++ /dev/null
+@@ -1,102 +0,0 @@
+-#!/usr/bin/env bash
+-# Compute Engine startup script.
+-#   gcloud compute instances create ... \
+-#     --metadata-from-file=startup-script=deploy/docker/vm-startup.sh
+-#
+-# Required instance metadata: image, domain, cors-origins, gemini-secret
+-# Optional:                   max-concurrent-jobs, prover-num-procs,
+-#                             checker-pool-size, mem-limit, cpus
+-#
+-# Output goes to the serial console:
+-#   gcloud compute instances get-serial-port-output mathprover --zone=...
+-set -euo pipefail
+-exec > >(tee -a /var/log/mathprover-startup.log | logger -t mathprover -s 2>/dev/console) 2>&1
+-
+-say() { echo "=== [$(date -Is)] $*"; }
+-
+-meta() {
+-  curl -sf -H "Metadata-Flavor: Google" \
+-    "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1" || true
+-}
+-
+-IMAGE="$(meta image)"
+-DOMAIN="$(meta domain)"
+-CORS_ORIGINS="$(meta cors-origins)"
+-SECRET="$(meta gemini-secret)"
+-
+-for v in IMAGE DOMAIN CORS_ORIGINS SECRET; do
+-  [ -n "${!v}" ] || { say "FATAL: instance metadata for $v is missing"; exit 1; }
+-done
+-say "image=$IMAGE domain=$DOMAIN"
+-
+-# --- docker ------------------------------------------------------------------
+-if ! command -v docker >/dev/null; then
+-  say "installing docker"
+-  curl -fsSL https://get.docker.com | sh          # includes the compose plugin
+-fi
+-docker compose version >/dev/null || { say "FATAL: docker compose plugin missing"; exit 1; }
+-
+-# --- gcloud ------------------------------------------------------------------
+-# Present on Google's Ubuntu/Debian images, but do not assume it.
+-if ! command -v gcloud >/dev/null; then
+-  say "installing google-cloud-cli"
+-  apt-get update -qq
+-  apt-get install -y -qq apt-transport-https ca-certificates gnupg curl
+-  curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+-    | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+-  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] \
+-https://packages.cloud.google.com/apt cloud-sdk main" \
+-    > /etc/apt/sources.list.d/google-cloud-sdk.list
+-  apt-get update -qq && apt-get install -y -qq google-cloud-cli
+-fi
+-
+-# --- block the metadata server for containers --------------------------------
+-# Untrusted Lean runs inside the container. 169.254.169.254 hands out this VM's
+-# service-account tokens to anything that can make an HTTP request. Do this
+-# BEFORE starting any container.
+-say "blocking container egress to the metadata server"
+-iptables -C DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null \
+-  || iptables -I DOCKER-USER -d 169.254.169.254 -j DROP 2>/dev/null \
+-  || iptables -I FORWARD -d 169.254.169.254 -j DROP
+-
+-# --- secret ------------------------------------------------------------------
+-say "reading $SECRET from Secret Manager"
+-GEMINI_API_KEY="$(gcloud secrets versions access latest --secret="$SECRET")"
+-[ -n "$GEMINI_API_KEY" ] || { say "FATAL: secret $SECRET is empty"; exit 1; }
+-
+-# --- image -------------------------------------------------------------------
+-install -d -m 0750 /opt/mathprover
+-cd /opt/mathprover
+-gcloud auth configure-docker "${IMAGE%%/*}" --quiet
+-say "pulling image (12-18 GB, several minutes)"
+-for attempt in 1 2 3; do
+-  docker pull "$IMAGE" && break
+-  say "pull failed (attempt $attempt), retrying in 20s"
+-  sleep 20
+-done
+-
+-# compose.yaml and Caddyfile ship inside the image so the host needs no checkout
+-CID="$(docker create "$IMAGE")"
+-docker cp "$CID:/srv/mathprover/app/deploy/docker/compose.yaml" ./compose.yaml
+-docker cp "$CID:/srv/mathprover/app/deploy/docker/Caddyfile" ./Caddyfile
+-docker rm "$CID" >/dev/null
+-
+-cat > .env <<ENVEOF
+-IMAGE=$IMAGE
+-DOMAIN=$DOMAIN
+-CORS_ORIGINS=$CORS_ORIGINS
+-GEMINI_API_KEY=$GEMINI_API_KEY
+-MAX_CONCURRENT_JOBS=$(meta max-concurrent-jobs || true)
+-PROVER_NUM_PROCS=$(meta prover-num-procs || true)
+-CHECKER_POOL_SIZE=$(meta checker-pool-size || true)
+-MEM_LIMIT=$(meta mem-limit || true)
+-CPUS=$(meta cpus || true)
+-ENVEOF
+-# Drop keys whose metadata was absent so compose falls back to its defaults.
+-sed -i '/=$/d' .env
+-chmod 0600 .env
+-
+-say "starting containers"
+-docker compose --env-file .env up -d
+-docker compose ps
+-say "done. checkers need ~2 minutes to import Mathlib; watch /api/health"

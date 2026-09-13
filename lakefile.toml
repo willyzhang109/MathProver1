@@ -1,0 +1,15 @@
+name = "MathProverProject"
+version = "0.0.0"
+defaultTargets = ["Challenge"]
+
+[[lean_lib]]
+name = "Challenge"
+srcDir = "."
+
+[[require]]
+name = "PyPantograph"
+path = "./PyPantograph/src"
+
+[[require]]
+name = "SafeVerify"
+path = "./SafeVerify"

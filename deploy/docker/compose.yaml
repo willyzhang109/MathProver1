@@ -1,0 +1,65 @@
+# docker compose -f deploy/docker/compose.yaml up -d
+#
+# Exactly one api replica. Never scale this: jobs, rate-limit counters and the
+# checker pool are in-process state, so a second replica halves the effective
+# rate limit and hides half of each user's job list.
+
+name: mathprover
+
+networks:
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        # Pinned so TRUSTED_PROXIES below can name it exactly. Inside Docker the
+        # reverse proxy is NOT 127.0.0.1 -- it is another container on this
+        # subnet. Leaving the default 127.0.0.1/32 would make every request look
+        # like it came from Caddy, collapsing all users into one rate-limit
+        # bucket.
+        - subnet: 172.28.0.0/16
+
+services:
+  api:
+    image: ${IMAGE:-mathprover-api:latest}
+    restart: always
+    networks: [edge]
+    expose: ["8080"]
+    # Reap zombies: the prover forks multiprocessing children, and without an
+    # init as PID 1 they accumulate as defunct entries until TasksMax is hit.
+    init: true
+    stop_grace_period: 90s
+    mem_limit: ${MEM_LIMIT:-48g}
+    cpus: ${CPUS:-8}
+    pids_limit: 2048
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    volumes:
+      - runs:/srv/mathprover/app/runs
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY}
+      CORS_ORIGINS: ${CORS_ORIGINS:?set CORS_ORIGINS}
+      TRUSTED_PROXIES: 172.28.0.0/16
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-2}
+      PROVER_NUM_PROCS: ${PROVER_NUM_PROCS:-2}
+      CHECKER_POOL_SIZE: ${CHECKER_POOL_SIZE:-2}
+      JOB_TIMEOUT_SECONDS: ${JOB_TIMEOUT_SECONDS:-1200}
+      MAX_JOBS_PER_DAY: ${MAX_JOBS_PER_DAY:-60}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    networks: [edge]
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN}
+    depends_on: [api]
+
+volumes:
+  runs:
+  caddy_data:
+  caddy_config:

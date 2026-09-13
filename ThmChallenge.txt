@@ -1,0 +1,1 @@
+Let P be a proposition. Prove that P holds, or P holds, or P does not hold ("P or P or not P" is always true).

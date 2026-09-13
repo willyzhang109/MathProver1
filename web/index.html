@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MathProver — automated Lean 4 proofs</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="screen-home">
+
+<header class="topbar">
+  <div class="brand" id="brand">MathProver</div>
+  <div class="limits" id="limits"></div>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <h2>Your jobs</h2>
+    <p class="muted small" id="jobs-empty">Jobs you submit appear here. They are
+      matched to your IP address, so they will still be listed when you come back.</p>
+    <ul class="joblist" id="joblist"></ul>
+  </aside>
+
+  <section class="content">
+
+    <!-- ---------------- home ---------------- -->
+    <div class="screen" id="screen-home">
+      <h1>Prove a theorem</h1>
+      <p class="muted">Describe a problem in plain English, or write the Lean 4
+        statement yourself. An LLM-driven prover will attempt it and every result
+        is checked by the Lean Compiler.</p>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-mode="nl" role="tab">Natural language</button>
+        <button class="tab" data-mode="lean" role="tab">Lean 4</button>
+      </div>
+
+      <div class="pane" id="pane-nl">
+        <label for="input-nl">Problem statement</label>
+        <textarea id="input-nl" rows="9" spellcheck="false"
+          placeholder="Prove that for every natural number n, the sum of the first n odd numbers is n squared."></textarea>
+        <div class="actions">
+          <button class="primary" id="btn-formalize">Convert to Lean →</button>
+          <span class="hint">You will be shown the Lean translation to review and edit before anything runs.</span>
+        </div>
+      </div>
+
+      <div class="pane hidden" id="pane-lean">
+        <label for="input-lean">Lean 4 statement</label>
+        <textarea id="input-lean" rows="12" spellcheck="false"
+          placeholder="theorem sum_odd (n : ℕ) : ∑ i ∈ Finset.range n, (2 * i + 1) = n ^ 2 := by sorry"></textarea>
+        <div class="actions">
+          <button class="primary" id="btn-check">Check it compiles →</button>
+          <span class="hint">No imports needed — Mathlib is already available.</span>
+        </div>
+      </div>
+
+      <div class="banner error hidden" id="home-error"></div>
+    </div>
+
+    <!-- ---------------- review / fix ---------------- -->
+    <div class="screen" id="screen-review">
+      <h1 id="review-title">Confirm the Lean translation</h1>
+      <p class="muted" id="review-sub">
+        Check that this says the same thing as your problem. Edit it if not — the
+        prover will prove exactly what is written here, not what you meant.</p>
+
+      <div class="split">
+        <div class="col" id="col-original">
+          <h3>Your problem</h3>
+          <div class="readonly" id="review-nl"></div>
+          <h3 id="restatement-head">What the Lean says</h3>
+          <div class="readonly small" id="review-restatement"></div>
+        </div>
+        <div class="col">
+          <h3>Lean 4 statement <span class="badge" id="review-badge"></span></h3>
+          <textarea id="review-lean" rows="16" spellcheck="false"></textarea>
+          <div class="errors" id="review-errors"></div>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="btn-solve" disabled>Confirm &amp; solve</button>
+        <button id="btn-recheck">Re-check</button>
+        <button id="btn-regenerate" class="hidden">Regenerate</button>
+        <button class="ghost" id="btn-back">Back</button>
+      </div>
+      <div class="banner error hidden" id="review-error"></div>
+    </div>
+
+    <!-- ---------------- job ---------------- -->
+    <div class="screen" id="screen-job">
+      <div class="jobhead">
+        <div>
+          <h1 id="job-title">Working…</h1>
+          <div class="muted small" id="job-meta"></div>
+        </div>
+        <span class="pill" id="job-phase">queued</span>
+      </div>
+
+      <div class="progress"><div class="bar" id="job-bar"></div></div>
+      <div class="stats" id="job-stats"></div>
+
+      <div class="banner hidden" id="job-banner"></div>
+
+      <h3>Current proof</h3>
+      <pre class="code" id="job-lean">waiting for the first attempt…</pre>
+
+      <div id="job-nl-wrap" class="hidden">
+        <h3>Natural-language proof</h3>
+        <div class="readonly" id="job-nl"></div>
+      </div>
+
+      <div id="job-errors-wrap" class="hidden">
+        <h3>Latest compiler errors</h3>
+        <div class="errors" id="job-errors"></div>
+      </div>
+
+      <h3>Activity</h3>
+      <ul class="log" id="job-log"></ul>
+
+      <div class="actions">
+        <button id="btn-cancel">Cancel job</button>
+        <button id="btn-download" class="hidden">Download proof</button>
+        <button class="ghost" id="btn-new">New problem</button>
+      </div>
+    </div>
+
+  </section>
+</main>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

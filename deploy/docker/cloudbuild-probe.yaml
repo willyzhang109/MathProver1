@@ -1,0 +1,33 @@
+# Fast connectivity probe. ~60 seconds instead of a 40-minute image build.
+#
+#   gcloud builds submit --config deploy/docker/cloudbuild-probe.yaml . --async=false
+#
+# Answers one question: can a Cloud Build worker git-clone from github.com in
+# the same base image the real Dockerfile uses? Lake hides git's stderr, so
+# this reproduces the clone directly where the message is visible.
+
+steps:
+  - name: python:3.13-slim-bookworm
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -x
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends git ca-certificates curl
+        git --version
+        echo "--- DNS / TLS to github.com ---"
+        getent hosts github.com || echo "DNS LOOKUP FAILED"
+        curl -sS -o /dev/null -w 'github https -> %{http_code}\n' https://github.com || echo "CURL FAILED"
+        echo "--- the clone Lake was attempting ---"
+        export GIT_TERMINAL_PROMPT=0
+        if git clone --depth 1 https://github.com/leanprover/lean4-cli.git /tmp/probe; then
+          echo "PROBE_OK: git clone works from Cloud Build"
+        else
+          echo "PROBE_FAILED: git exited $?"
+          exit 1
+        fi
+
+options:
+  logging: LEGACY
+timeout: 600s

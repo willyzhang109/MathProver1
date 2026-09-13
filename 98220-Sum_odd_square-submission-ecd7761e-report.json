@@ -1,0 +1,31 @@
+[["sumOdd_zero",
+  {"targetInfo":
+   {"constInfo": {"kind": "theorem"}, "axioms": ["propext", "sorryAx"]},
+   "solutionInfo": {"constInfo": {"kind": "theorem"}, "axioms": ["propext"]},
+   "failureMode": null}],
+ ["odd_sum_succ_identity",
+  {"targetInfo":
+   {"constInfo": {"kind": "theorem"}, "axioms": ["propext", "sorryAx"]},
+   "solutionInfo":
+   {"constInfo": {"kind": "theorem"},
+    "axioms": ["propext", "Classical.choice", "Quot.sound"]},
+   "failureMode": null}],
+ ["sumOdd.match_1",
+  {"targetInfo": {"constInfo": {"kind": "definition"}, "axioms": []},
+   "solutionInfo": {"constInfo": {"kind": "definition"}, "axioms": []},
+   "failureMode": null}],
+ ["sumOdd._sunfold",
+  {"targetInfo": {"constInfo": {"kind": "definition"}, "axioms": []},
+   "solutionInfo": {"constInfo": {"kind": "definition"}, "axioms": []},
+   "failureMode": null}],
+ ["sum_of_odds_eq_sq",
+  {"targetInfo":
+   {"constInfo": {"kind": "theorem"}, "axioms": ["propext", "sorryAx"]},
+   "solutionInfo":
+   {"constInfo": {"kind": "theorem"},
+    "axioms": ["propext", "Classical.choice", "Quot.sound"]},
+   "failureMode": null}],
+ ["sumOdd",
+  {"targetInfo": {"constInfo": {"kind": "definition"}, "axioms": []},
+   "solutionInfo": {"constInfo": {"kind": "definition"}, "axioms": []},
+   "failureMode": null}]]

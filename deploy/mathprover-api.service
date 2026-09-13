@@ -1,0 +1,78 @@
+# /etc/systemd/system/mathprover-api.service
+[Unit]
+Description=MathProver API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=mathprover
+Group=mathprover
+WorkingDirectory=/srv/mathprover/MathProverProject
+EnvironmentFile=/etc/mathprover/server.env
+
+# One worker only. Jobs, rate-limit counters and the checker pool are all
+# in-process state; a second worker would halve the effective rate limit and
+# hide half of each user's job list.
+#
+# --forwarded-allow-ips="" and the absence of --proxy-headers are load-bearing:
+# they stop uvicorn rewriting request.client from X-Forwarded-For before
+# server/clientip.py can decide whether that header is trustworthy.
+ExecStart=/srv/mathprover/MathProverProject/.venv/bin/uvicorn server.app:app \
+    --host 127.0.0.1 --port 8080 --workers 1 \
+    --forwarded-allow-ips="" --no-access-log
+
+Restart=always
+RestartSec=5
+# Reap the whole cgroup: the prover forks multiprocessing children that each
+# own a pantograph-repl holding Mathlib in memory.
+KillMode=control-group
+TimeoutStopSec=90
+
+# --- resources --------------------------------------------------------------
+# Size for MAX_CONCURRENT_JOBS * PROVER_NUM_PROCS + CHECKER_POOL_SIZE
+# Mathlib-resident processes. Measure real RSS before raising these.
+MemoryMax=48G
+MemoryHigh=44G
+CPUQuota=1200%
+TasksMax=2048
+LimitNOFILE=65536
+
+# --- hardening --------------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Everything is pre-built; nothing at request time should mutate .lake
+ReadWritePaths=/srv/mathprover/MathProverProject/runs /srv/mathprover/cache
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# MUST stay "no". safe_verify is built with supportInterpreter := true and both
+# it and pantograph-repl map executable pages; "yes" breaks Lean outright.
+MemoryDenyWriteExecute=no
+
+# Jobs cannot be fully network-isolated: the prover calls the Gemini API from
+# inside its own worker processes. What is achievable is blocking the cloud
+# metadata endpoint (credential theft) and the private ranges (lateral movement
+# into your VPC), while leaving public egress open.
+# For true egress control, see deploy/squid/egress.conf and swap these for
+# IPAddressDeny=any + IPAddressAllow=localhost.
+IPAddressDeny=169.254.0.0/16 fd00::/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+
+[Install]
+WantedBy=multi-user.target

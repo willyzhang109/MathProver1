@@ -1,0 +1,44 @@
+# gcloud builds submit --config deploy/docker/cloudbuild.yaml .
+#
+# Building locally and pushing a 12-18 GB image over a home connection is
+# painful; Cloud Build keeps the bytes inside Google's network.
+#
+# Two things that bite here:
+#  - Substitution DEFAULTS are literal strings. Cloud Build does not expand
+#    ${PROJECT_ID} inside them, so the project must be referenced directly in
+#    args/images, where built-in substitution does happen.
+#  - SHORT_SHA is only populated for git-triggered builds. `builds submit` from
+#    a local directory leaves it empty, producing an invalid "image:" tag.
+#    BUILD_ID is always set.
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - deploy/docker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_NAME}:latest
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_NAME}:$BUILD_ID
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_NAME}:latest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_NAME}:$BUILD_ID
+
+# Override with e.g. --substitutions=_REGION=europe-west1
+substitutions:
+  _REGION: us-central1
+  _REPO: mathprover
+  _NAME: api
+
+options:
+  # Mathlib needs both the disk and the CPU; the defaults are far too small.
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: 250
+  # Deliberately NOT logging: CLOUD_LOGGING_ONLY -- that setting stops
+  # `gcloud builds submit` from streaming output, so a failing build prints
+  # nothing but "step exited with non-zero status".
+
+timeout: 5400s
