@@ -2,12 +2,14 @@
 
 By William Zhang
 
-This repository contains an automatic theorem prover that I designed and implemented as a personal project. I have been very interested in Automated Theorem Proving (ATP) for a while, but it's not until very recently, particularly within the past year, that AI through Large Language Models (LLMs) could prove nontrivial theorems with frequent successes. Now with LLMs highly capable of advanced math reasoning such as ChatGPT, Claude, and Gemini readily available through API access, combined with the auto-verification feature of Lean 4, such an automatic tool is finally feasible and accessible. This project was an attempt in bringing such a tool to a wider audience. Coincidentally, a couple of weeks after this project concluded, OpenAI announced that they solved the Navier-Stokes Millennium Prize Problem with their in-house LLM ([Finite Time Blowup for Navier–Stokes](https://cdn.openai.com/pdf/32d9f210-8b73-45e0-91bc-82a30aef8a9a/navier-stokes.pdf)). This was in addition to other recent solutions to some decade-old open mathematics, physics, and computer science problems published by frontier AI labs including Anthropic, Google DeepMind, and OpenAI. Such is an exciting time, to say the least!  
+This repository contains an automatic theorem prover that I designed and implemented as a personal project. I have been very interested in Automated Theorem Proving (ATP) for a while, but it's not until very recently, particularly within the past year, that AI through Large Language Models (LLMs) could prove nontrivial theorems with frequent successes. Now with LLMs highly capable of advanced math reasoning such as ChatGPT, Claude, and Gemini readily available through API access, combined with the auto-verification feature of Lean 4, such an automatic tool is finally feasible and accessible. This project was an attempt in bringing such a tool to a wider audience. Coincidentally, a couple of weeks after this project concluded, OpenAI announced that they solved the Navier-Stokes Millennium Prize Problem with their in-house LLM ([Finite Time Blowup for Navier–Stokes](https://cdn.openai.com/pdf/32d9f210-8b73-45e0-91bc-82a30aef8a9a/navier-stokes.pdf)). This was in addition to other recent solutions to some decade-old open mathematics, physics, and computer science problems published by frontier AI labs including Anthropic, Google DeepMind, and OpenAI. It is such an exciting time for ATP, to say the least! 
+
+The server can be accessed at [Math Prover](https://htmlpreview.github.io/?https://github.com/willyzhang109/MathProver1/blob/main/web/index.html).   Please note that the service may be unavailable due to spending limit reached.
 
 ## The Structure
 
 - **The Interface:** The user interacts with the system through a web browser by entering the math theorem to be proved in either Lean 4 form or in natural language plus Lean 4 form. The request is then sent to the proof-synthesizing agent server. To facilitate users without much experience in Lean interacting with the system, an interface is also provided to convert a natural language problem statement to Lean 4 form. (Users can also use their favorite LLMs directly to convert to and/or verify the problem's Lean 4 form.) After a request is submitted, the user can monitor the progress of the proof-searching agent.
-Lean 4 is required in both cases because it's the only automatic/programmatic way of verifying the LLM's proposed proof. While the Lean 4 only form provides a much more concise interface to the LLM, particularly for LLMs with a small context window size, the natural language statement option provides the LLM with more context for proof technique searching. 
+Lean 4 is required in both cases because it's the only automatic/programmatic way of verifying the LLM's proposed proof. While the Lean 4-only form provides a much more concise interface to the LLM, particularly for LLMs with a small context window size, the natural language statement option provides the LLM with more context for proof technique searching. 
 
 - **The Core:** At the core is a Ralph loop that iteratively queries/prompts an LLM to complete the proof and automatically verifies the LLM’s responses using the Lean 4 compiler, feeding any errors back to the LLM, until either a complete proof is found or resource limit (token or LLM API budget) has been reached.
 
@@ -21,7 +23,7 @@ Lean 4 is required in both cases because it's the only automatic/programmatic wa
 
 ## The Example
 
-I fed the system the first problem from IMO 2026 in Lean 4 only form. With Gemini 3.6 Flash (knowledge cutoff date: 02/2026--so no leakage) as the LLM, it gave me a complete proof after about $10 of API spending.
+I fed the system the first problem from IMO 2026 in Lean 4-only form. With Gemini 3.6 Flash (knowledge cutoff date: 02/2026--so no leakage) as the LLM, it gave me a complete proof after about $10 of API spending. The original problem with a natural language solution can be found [here](https://artofproblemsolving.com/wiki/index.php?title=2026_IMO_Problems/Problem_1).
 
 The problem in Lean 4 (The EVOLVE-BLOCK-START/END markers are for instructing the LLM where it can make changes):
 
@@ -121,7 +123,7 @@ theorem Mval_gt_one (B₀ : Board) (hB₀ : IsInitial B₀) : 1 < Mval B₀ := b
 -- EVOLVE-BLOCK-END
 ```
 
-The complete and verified proof returned by the agent after 6 loops, with no "sorry" lemmas or new axioms introduced:
+The complete and verified proof returned by the agent after 6 loops (with no "sorry" lemmas or new axioms introduced), which can be fed to any Lean 4 compiler for verification:
 ```lean
 import Mathlib
 open Multiset
@@ -917,5 +919,10 @@ theorem Mval_gt_one (B₀ : Board) (hB₀ : IsInitial B₀) : 1 < Mval B₀ := b
   have hprod_ge : a.minFac ^ gExp a.minFac B₀ ≤ ∏ p ∈ B₀.prod.primeFactors, p ^ gExp p B₀ := by
     exact Finset.single_le_prod' (fun p hp_mem => Nat.one_le_pow (gExp p B₀) p (Nat.Prime.pos (Nat.prime_of_mem_primeFactors hp_mem))) hmem_pf
   omega
-                   % 
 ```
+
+
+
+
+
+
